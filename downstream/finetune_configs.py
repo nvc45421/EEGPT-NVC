@@ -20,24 +20,14 @@ def load_fn(x):
     x = x.to(torch.float)
     return x
 
-max_epochs = 200
-max_lr = 5e-4
-batch_size=64
+# max_epochs = 200
+# max_lr = 5e-4
+# batch_size=64
 devices=[0]
 
-
-
-train_dataset = torchvision.datasets.DatasetFolder(root="/home/ids/vnguyen-23/data/EEGPT_data/pretrain/merged/TrainFolder/", loader=load_fn,  extensions=['.edf'])
-valid_dataset = torchvision.datasets.DatasetFolder(root="/home/ids/vnguyen-23/data/EEGPT_data/pretrain/merged/ValidFolder/", loader=load_fn, extensions=['.edf'])
-
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=63, shuffle=True)
-valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size, num_workers=63, shuffle=False)
-
-
-steps_per_epoch = math.ceil(len(train_loader)/len(devices))
-
-tag = "base3"
+tag = "tiny2"
 variant = "D"
+version = "0"
 
 MODELS_CONFIGS = {
     "tiny1": {

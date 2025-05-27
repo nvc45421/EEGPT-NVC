@@ -24,36 +24,34 @@ seed_torch(7)
 
 from Modules.models.EEGPT_mcae import EEGTransformer
 
-from Modules.models.EEGPT_mcae import EEGTransformer
-
 from Modules.Network.utils import Conv1dWithConstraint, LinearWithConstraint
 from utils_eval import get_metrics
+from finetune_configs import *
 
-EEGPT_checkpoint = "../pretrain/logs/EEGPT_large_D_tb/version_0/checkpoints/epoch=199-step=786000.ckpt"
+use_channels_names = [      
+               'FP1', 'FP2',
+        'F7', 'F3', 'FZ', 'F4', 'F8',
+        'T7', 'C3', 'CZ', 'C4', 'T8',
+        'P7', 'P3', 'PZ', 'P4', 'P8',
+                'O1', 'O2' ]
 
 class LitEEGPTCausal(pl.LightningModule):
 
-    def __init__(self, load_path=EEGPT_checkpoint):
+    def __init__(self, models_configs, load_path):
         super().__init__()    
-        self.chans_num = 7
-
-        use_channels_names = [ 'C5', 'C3', 'C1', 'CZ', 'C2', 'C4', 'C6' ]
-
+        self.chans_num = 19
         # init model
         target_encoder = EEGTransformer(
-            img_size=[7, 1024],
+            img_size=[19, 1024],
             patch_size=32*2,
-            embed_num=4,
-            embed_dim=512,
-            depth=8,
-            num_heads=8,
             mlp_ratio=4.0,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             drop_path_rate=0.0,
             init_std=0.02,
             qkv_bias=True, 
-            norm_layer=partial(nn.LayerNorm, eps=1e-6))
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            **models_configs["encoder"])
             
         self.target_encoder = target_encoder
         self.chans_id       = target_encoder.prepare_chan_ids(use_channels_names)
@@ -65,40 +63,41 @@ class LitEEGPTCausal(pl.LightningModule):
         for k,v in pretrain_ckpt['state_dict'].items():
             if k.startswith("target_encoder."):
                 target_encoder_stat[k[15:]]=v
-        
                 
         self.target_encoder.load_state_dict(target_encoder_stat)
-
-        self.chan_conv       = Conv1dWithConstraint(3, self.chans_num, 1, max_norm=1)
+        self.chan_conv       = Conv1dWithConstraint(22, self.chans_num, 1, max_norm=1)
         
-        self.linear_probe1   =   LinearWithConstraint(2048, 16, max_norm=1)
-        self.linear_probe2   =   LinearWithConstraint(16*16, 4, max_norm=0.25)
-       
+        # Extract relevant model config
+        encoder_cfg = models_configs["encoder"]
+        embed_dim = encoder_cfg["embed_dim"]
+        embed_num = encoder_cfg["embed_num"]
+        img_size=[19, 1024]
+        patch_size=32*2
+        # Compute number of temporal patches
+        chans, timesteps = img_size
+        num_time_patches = timesteps // patch_size
+
+        # Final transformer output shape: [B, num_time_patches, embed_num, embed_dim]
+        # After flattening: [B, num_time_patches, embed_num * embed_dim]
+        probe1_input_dim = embed_dim * embed_num                          # each token
+        probe2_input_dim = num_time_patches * 16  # after first linear projection to 16-dim
+
+        # Define layers
+        self.linear_probe1 = LinearWithConstraint(probe1_input_dim, 16, max_norm=1)
+        self.linear_probe2 = LinearWithConstraint(probe2_input_dim, 4, max_norm=0.25)
+        
         self.drop           = torch.nn.Dropout(p=0.50)
         
         self.loss_fn        = torch.nn.CrossEntropyLoss()
         self.running_scores = {"train":[], "valid":[], "test":[]}
         self.is_sanity=True
         
-    def mixup_data(self, x, y, alpha=None):
-        # 随机选择另一个样本来混合数据
-        
-        lam = torch.rand(1).to(x) if alpha is None else alpha
-        lam = torch.max(lam, 1 - lam)
-
-        batch_size = x.size(0)
-        index = torch.randperm(batch_size)
-        mixed_x = lam * x + (1 - lam) * x[index, :]
-        mixed_y = lam * y + (1 - lam) * y[index]
-
-        return mixed_x, mixed_y
-    
     def forward(self, x):
-        # print(x.shape) # B, C, T
-        B, C, T = x.shape
-        x = x/10
+        
         x = self.chan_conv(x)
+        
         self.target_encoder.eval()
+        
         z = self.target_encoder(x, self.chans_id.to(x))
         
         h = z.flatten(2)
@@ -131,8 +130,8 @@ class LitEEGPTCausal(pl.LightningModule):
         self.log('data_std', x.std(), on_epoch=True, on_step=False)
         
         return loss
-        
-        
+    
+    
     def on_validation_epoch_start(self) -> None:
         self.running_scores["valid"]=[]
         return super().on_validation_epoch_start()
@@ -149,8 +148,8 @@ class LitEEGPTCausal(pl.LightningModule):
         y_score = torch.cat(y_score, dim=0)
         print(label.shape, y_score.shape)
         
-        metrics = ["accuracy", "balanced_accuracy", "precision", "recall", "cohen_kappa", "f1", "roc_auc"]
-        results = get_metrics(y_score.cpu().numpy(), label.cpu().numpy(), metrics, True)
+        metrics = ["accuracy", "balanced_accuracy", "cohen_kappa", "f1_weighted", "f1_macro", "f1_micro"]
+        results = get_metrics(y_score.cpu().numpy(), label.cpu().numpy(), metrics, False)
         
         for key, value in results.items():
             self.log('valid_'+key, value, on_epoch=True, on_step=False, sync_dist=True)
@@ -169,10 +168,7 @@ class LitEEGPTCausal(pl.LightningModule):
         self.log('valid_loss', loss, on_epoch=True, on_step=False)
         self.log('valid_acc', accuracy, on_epoch=True, on_step=False)
         
-        y_score =  logit
-        y_score =  torch.softmax(y_score, dim=-1)[:,1]
-        self.running_scores["valid"].append((label.clone().detach().cpu(), y_score.clone().detach().cpu()))
-
+        self.running_scores["valid"].append((label.clone().detach().cpu(), logit.clone().detach().cpu()))
         return loss
     
     def configure_optimizers(self):
@@ -200,14 +196,20 @@ class LitEEGPTCausal(pl.LightningModule):
         
 # load configs
 # -- LOSO 
+
+# load configs
 from utils import *
+
+data_path = "/home/ids/vnguyen-23/data/EEGPT_data/downstream/Data/BCIC_2a_0_38HZ"
+checkpoint_path = f"../pretrain/logs/EEGPT_{tag}_{variant}_tb/version_{version}/checkpoints/epoch=199-step=786000.ckpt"
+model_type = f"{tag}_{variant}_rep"
 import math
-data_path = "/home/ids/vnguyen-23/data/EEGPT_data/downstream/Data/BCIC_2b_0_38HZ/"
+# used seed: 7
 seed_torch(8)
 for i in range(1,10):
     all_subjects = [i]
     all_datas = []
-    train_dataset,valid_dataset,test_dataset = get_data(i,data_path,1, is_few_EA = True, target_sample=256*4)
+    train_dataset,valid_dataset,test_dataset = get_data(i,data_path,1,is_few_EA = True, target_sample=1024)
     
     global max_epochs
     global steps_per_epoch
@@ -216,25 +218,25 @@ for i in range(1,10):
     batch_size=64
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=63, shuffle=True)
-    valid_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, num_workers=63, shuffle=False)
+    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size, num_workers=63, shuffle=False)
+    test_loader  = torch.utils.data.DataLoader(test_dataset,  batch_size=batch_size, num_workers=63, shuffle=False)
     
     max_epochs = 100
     steps_per_epoch = math.ceil(len(train_loader) )
     max_lr = 4e-4
 
     # init model
-    model = LitEEGPTCausal()
-
-    # most basic trainer, uses good defaults (auto-tensorboard, checkpoints, logs, and more)
+    model = LitEEGPTCausal(get_config(**(MODELS_CONFIGS[tag])),
+                 load_path=checkpoint_path, )
     lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='epoch')
     callbacks = [lr_monitor]
     
     trainer = pl.Trainer(accelerator='cuda',
-                         precision=16,
+                         devices=[0,], 
                          max_epochs=max_epochs, 
                          callbacks=callbacks,
                          enable_checkpointing=False,
-                         logger=[pl_loggers.TensorBoardLogger('./logs/', name="EEGPT_BCIC2B_tb_original", version=f"subject{i}"), 
-                                 pl_loggers.CSVLogger('./logs/', name="EEGPT_BCIC2B_csv_original", version=f"subject{i}")],)
+                         logger=[pl_loggers.TensorBoardLogger('./logs/', name=f"{model_type}_EEGPT_BCIC2A_tb", version=f"subject{i}"), 
+                                 pl_loggers.CSVLogger('./logs/', name=f"{model_type}_EEGPT_BCIC2A_csv")])
 
-    trainer.fit(model, train_loader, valid_loader, ckpt_path='last')
+    trainer.fit(model, train_loader, test_loader, ckpt_path='last')

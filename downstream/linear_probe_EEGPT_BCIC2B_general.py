@@ -29,11 +29,10 @@ from Modules.models.EEGPT_mcae import EEGTransformer
 from Modules.Network.utils import Conv1dWithConstraint, LinearWithConstraint
 from utils_eval import get_metrics
 
-EEGPT_checkpoint = "../pretrain/logs/EEGPT_large_D_tb/version_0/checkpoints/epoch=199-step=786000.ckpt"
-
+from finetune_configs import *
 class LitEEGPTCausal(pl.LightningModule):
 
-    def __init__(self, load_path=EEGPT_checkpoint):
+    def __init__(self, models_configs, load_path="../checkpoint/eegpt_mcae_58chs_4s_large4E.ckpt"):
         super().__init__()    
         self.chans_num = 7
 
@@ -43,17 +42,14 @@ class LitEEGPTCausal(pl.LightningModule):
         target_encoder = EEGTransformer(
             img_size=[7, 1024],
             patch_size=32*2,
-            embed_num=4,
-            embed_dim=512,
-            depth=8,
-            num_heads=8,
             mlp_ratio=4.0,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             drop_path_rate=0.0,
             init_std=0.02,
             qkv_bias=True, 
-            norm_layer=partial(nn.LayerNorm, eps=1e-6))
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            **models_configs["encoder"])
             
         self.target_encoder = target_encoder
         self.chans_id       = target_encoder.prepare_chan_ids(use_channels_names)
@@ -71,8 +67,24 @@ class LitEEGPTCausal(pl.LightningModule):
 
         self.chan_conv       = Conv1dWithConstraint(3, self.chans_num, 1, max_norm=1)
         
-        self.linear_probe1   =   LinearWithConstraint(2048, 16, max_norm=1)
-        self.linear_probe2   =   LinearWithConstraint(16*16, 4, max_norm=0.25)
+        # Extract relevant model config
+        encoder_cfg = models_configs["encoder"]
+        embed_dim = encoder_cfg["embed_dim"]
+        embed_num = encoder_cfg["embed_num"]
+        img_size=[7, 1024]
+        patch_size=32*2
+        # Compute number of temporal patches
+        chans, timesteps = img_size
+        num_time_patches = timesteps // patch_size
+
+        # Final transformer output shape: [B, num_time_patches, embed_num, embed_dim]
+        # After flattening: [B, num_time_patches, embed_num * embed_dim]
+        probe1_input_dim = embed_dim * embed_num                          # each token
+        probe2_input_dim = num_time_patches * 16  # after first linear projection to 16-dim
+
+        # Define layers
+        self.linear_probe1 = LinearWithConstraint(probe1_input_dim, 16, max_norm=1)
+        self.linear_probe2 = LinearWithConstraint(probe2_input_dim, 4, max_norm=0.25)
        
         self.drop           = torch.nn.Dropout(p=0.50)
         
@@ -203,6 +215,8 @@ class LitEEGPTCausal(pl.LightningModule):
 from utils import *
 import math
 data_path = "/home/ids/vnguyen-23/data/EEGPT_data/downstream/Data/BCIC_2b_0_38HZ/"
+checkpoint_path = f"../pretrain/logs/EEGPT_{tag}_{variant}_tb/version_{version}/checkpoints/epoch=199-step=786000.ckpt"
+model_type = f"{tag}_{variant}_rep"
 seed_torch(8)
 for i in range(1,10):
     all_subjects = [i]
@@ -215,16 +229,16 @@ for i in range(1,10):
 
     batch_size=64
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=63, shuffle=True)
-    valid_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, num_workers=63, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=0, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, num_workers=0, shuffle=False)
     
     max_epochs = 100
     steps_per_epoch = math.ceil(len(train_loader) )
     max_lr = 4e-4
 
     # init model
-    model = LitEEGPTCausal()
-
+    model = LitEEGPTCausal(get_config(**(MODELS_CONFIGS[tag])),
+                 load_path=checkpoint_path)
     # most basic trainer, uses good defaults (auto-tensorboard, checkpoints, logs, and more)
     lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='epoch')
     callbacks = [lr_monitor]
@@ -234,7 +248,7 @@ for i in range(1,10):
                          max_epochs=max_epochs, 
                          callbacks=callbacks,
                          enable_checkpointing=False,
-                         logger=[pl_loggers.TensorBoardLogger('./logs/', name="EEGPT_BCIC2B_tb_original", version=f"subject{i}"), 
-                                 pl_loggers.CSVLogger('./logs/', name="EEGPT_BCIC2B_csv_original", version=f"subject{i}")],)
+                         logger=[pl_loggers.TensorBoardLogger('./logs/', name=f"{model_type}_EEGPT_BCIC2B_tb", version=f"subject{i}"), 
+                                 pl_loggers.CSVLogger('./logs/', name=f"{model_type}_EEGPT_BCIC2B_csv")])
 
     trainer.fit(model, train_loader, valid_loader, ckpt_path='last')

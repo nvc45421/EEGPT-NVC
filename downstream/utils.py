@@ -28,10 +28,10 @@ root_path = current_path # os.path.split(current_path)[0]
 
 sys.path.append(root_path)
 
-data_path = os.path.join(root_path,'Data','BCIC_2a_0_38HZ')
-if not os.path.exists(data_path):
-    print('BCIC_2a_0_38HZ数据不存在，开始初始化！')
-    Load_BCIC_2a_raw_data(0,4,[0,38])
+# data_path = os.path.join(root_path,'Data','BCIC_2a_0_38HZ')
+# if not os.path.exists(data_path):
+#     print('BCIC_2a_0_38HZ数据不存在，开始初始化！')
+#     Load_BCIC_2a_raw_data(0,4,[0,38])
         
 def set_seed(seed):
     random.seed(seed)

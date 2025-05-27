@@ -56,7 +56,6 @@ def temporal_interpolation(x, desired_sequence_length, mode='nearest'):
         return torch.nn.functional.interpolate(x, desired_sequence_length, mode=mode)
     else:
         raise ValueError("TemporalInterpolation only support sequence of single dim channels with optional batch")
-    
 
 
 def get_physionet_dataset():

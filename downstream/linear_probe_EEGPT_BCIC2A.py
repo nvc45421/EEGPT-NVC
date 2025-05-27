@@ -34,9 +34,11 @@ use_channels_names = [
         'P7', 'P3', 'PZ', 'P4', 'P8',
                 'O1', 'O2' ]
 
+EEGPT_checkpoint = "../pretrain/logs/EEGPT_large_D_tb/version_0/checkpoints/epoch=199-step=786000.ckpt"
+
 class LitEEGPTCausal(pl.LightningModule):
 
-    def __init__(self, load_path="../checkpoint/eegpt_mcae_58chs_4s_large4E.ckpt"):
+    def __init__(self, load_path=EEGPT_checkpoint):
         super().__init__()    
         self.chans_num = 19
         # init model
@@ -184,7 +186,7 @@ class LitEEGPTCausal(pl.LightningModule):
 
 # load configs
 from utils import *
-data_path = "../datasets/downstream/Data/BCIC_2a_0_38HZ"
+data_path = "/home/ids/vnguyen-23/data/EEGPT_data/downstream/Data/BCIC_2a_0_38HZ/"
 import math
 # used seed: 7
 seed_torch(8)
@@ -199,9 +201,9 @@ for i in range(1,10):
 
     batch_size=64
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=0, shuffle=True)
-    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size, num_workers=0, shuffle=False)
-    test_loader  = torch.utils.data.DataLoader(test_dataset,  batch_size=batch_size, num_workers=0, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, num_workers=63, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=batch_size, num_workers=63, shuffle=False)
+    test_loader  = torch.utils.data.DataLoader(test_dataset,  batch_size=batch_size, num_workers=63, shuffle=False)
     
     max_epochs = 100
     steps_per_epoch = math.ceil(len(train_loader) )
@@ -218,7 +220,7 @@ for i in range(1,10):
                          max_epochs=max_epochs, 
                          callbacks=callbacks,
                          enable_checkpointing=False,
-                         logger=[pl_loggers.TensorBoardLogger('./logs/', name="EEGPT_BCIC2A_tb", version=f"subject{i}"), 
-                                 pl_loggers.CSVLogger('./logs/', name="EEGPT_BCIC2A_csv")])
+                         logger=[pl_loggers.TensorBoardLogger('./logs/', name="EEGPT_BCIC2A_tb_original", version=f"subject{i}"), 
+                                 pl_loggers.CSVLogger('./logs/', name="EEGPT_BCIC2A_csv_original", version=f"subject{i}")],)
 
     trainer.fit(model, train_loader, test_loader, ckpt_path='last')
