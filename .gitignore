@@ -1,0 +1,59 @@
+# Byte-compiled / cached
+__pycache__/
+*.py[cod]
+*.so
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VSCode settings
+.vscode/
+
+# Environment files
+.env
+*.env
+*.yml
+*.yaml
+
+# Virtual environments
+.venv/
+venv/
+env/
+conda_env/
+
+# Logs and outputs
+*.log
+*.out
+*.err
+logs/
+*.bak
+*.tmp
+
+# Snapshots
+config_snapshots/
+downstream_snapshot_*/
+
+# PyTorch checkpoints and model weights
+*.pth
+*.pt
+*.ckpt
+
+# Data artifacts
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.joblib
+
+# Temporary files
+.DS_Store
+Thumbs.db
+
+# SLURM output (optional, in case logs not redirected)
+slurm-*.out
+
+# OS generated
+*.swp
+*.swo
+
